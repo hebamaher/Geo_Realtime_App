@@ -1,0 +1,130 @@
+legends:
+  EQ:
+    label: EQ
+    type: discrete
+    thresholds:
+      - value: EQ1
+        color: "#7DBD75"
+        label: "EQ1"
+      - value: PC
+        color: "#120F33"
+        label: "PC"
+      - value: PCTX
+        color: "#4C73C8"
+        label: "PCTX"
+
+  All-MR-DC Cell RSRP[1]:
+    label: All-MR-DC Cell RSRP[1]
+    type: numeric
+    thresholds:
+      - min: -1000
+        max: -120
+        color: "#d73027"
+        label: "< -120"
+      - min: -120
+        max: -110
+        color: "#fc8d59"
+        label: "-120 to -110"
+      - min: -110
+        max: -100
+        color: "#fee08b"
+        label: "-110 to -100"
+      - min: -100
+        max: -90
+        color: "#91cf60"
+        label: "-100 to -90"
+      - min: -90
+        max: 1000
+        color: "#1a9850"
+        label: ">= -90"
+
+  All-Multi RAT Connectivity Mode:
+    label: All-Multi RAT Connectivity Mode
+    type: discrete
+    thresholds:
+      - value: LTE
+        color: "blue"
+        label: "LTE"
+      - value: EN-DC 3LTE+1NR
+        color: "purple"
+        label: "EN-DC 3LTE+1NR"
+
+  EQ1- Serving Cell SNR[1]:
+    label: EQ1- Serving Cell SNR[1]
+    type: numeric
+    thresholds:
+      - min: 20
+        max:  999999999
+        color: "#1a9990"
+        label: "> 20"
+      - min: 15
+        max: 20
+        color: "#1a9890"
+        label: "15 to 20"
+      - min: 10
+        max: 15
+        color: "#1a9850"
+        label: "10 to 15"
+      - min: 5
+        max: 10
+        color: "#91cf60"
+        label: "5 to 10"
+      - min: 0
+        max: 5
+        color: "#fee08b"
+        label: "0 to 5"
+      - min: -3
+        max: 0
+        color: "#fc8d59"
+        label: "-3 to 0"
+      - min: -999999999
+        max: -3
+        color: "#d73027"
+        label: "< -3"
+      
+  All-PDSCH Phy Throughput Per Carrier (Mbit/s)[1]:
+    label: All-PDSCH Phy Throughput Per Carrier (Mbit/s)[1]
+    type: numeric
+    thresholds:
+      - min: 400
+        max:  999999999
+        color: "#C6901C"
+        label: "> 400"
+      - min: 200
+        max: 400
+        color: "#1A5131"
+        label: "200 to 400"
+      - min: 100
+        max: 200
+        color: "#BC2461"
+        label: "100 to 200"
+      - min: 30
+        max: 100
+        color: "#5F1511"
+        label: "30 to 100"
+      - min: -999999999
+        max: 30
+        color: "#643DAE"
+        label: "< 30"
+  
+  All-PUSCH Phy Throughput (Mbit/s):
+    label: All-PUSCH Phy Throughput (Mbit/s)
+    type: numeric
+    thresholds:
+      - min: 80
+        max:  999999999
+        color: "red"
+        label: "> 80"
+      - min: 40
+        max: 80
+        color: "orange"
+        label: "40 to 80"
+      - min: 20
+        max: 40
+        color: "green"
+        label: "20 to 40"
+      - min: -999999999
+        max: 20
+        color: "brown"
+        label: "< 20"
+
