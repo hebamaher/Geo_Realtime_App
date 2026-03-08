@@ -171,23 +171,15 @@ function getVisiblePoints() {
 function redraw() {
   state.layerGroups.forEach((group) => group.clearLayers());
 
-  const visiblePoints = getVisiblePoints()
-    .slice()
-    .sort((a, b) => {
-      const routeCompare = String(a.route_id).localeCompare(String(b.route_id));
-      if (routeCompare !== 0) return routeCompare;
-      return (a.time_ms || 0) - (b.time_ms || 0);
-    });
-
+  const visiblePoints = getVisiblePoints();
   const bounds = [];
   const enabledMeasurements = Array.from(state.enabledMeasurements);
 
+  // optional: only enable tooltips when point count is not huge
+  const enableTooltips = visiblePoints.length <= 3000;
+
   for (const measurementName of enabledMeasurements) {
     const layer = ensureLayer(measurementName);
-
-    // route_id -> array of segments
-    const routeSegments = new Map();
-    const routeColors = new Map();
 
     for (const point of visiblePoints) {
       const value = point.measurements?.[measurementName];
@@ -197,80 +189,17 @@ function redraw() {
       const color = getMeasurementColor(measurementName, value);
       if (!color) continue;
 
-      L.circleMarker([lat, lng], {
+      const marker = L.circleMarker([lat, lng], {
         renderer: canvasRenderer,
         radius: 4,
         color,
         weight: 1,
         fillColor: color,
         fillOpacity: 0.9
-      })
-        .bindTooltip(buildTooltip(point), {
-          sticky: true,
-          direction: 'top',
-          opacity: 0.95
-        })
-        .addTo(layer);
+      });
 
+      marker.addTo(layer);
       bounds.push([lat, lng]);
-
-      if (!routeSegments.has(point.route_id)) {
-        routeSegments.set(point.route_id, [[[lat, lng, point.time_ms || 0]]]);
-      } else {
-        const segments = routeSegments.get(point.route_id);
-        const currentSegment = segments[segments.length - 1];
-        const prev = currentSegment[currentSegment.length - 1];
-
-        let shouldBreak = false;
-
-        if (prev) {
-          const prevLat = prev[0];
-          const prevLng = prev[1];
-          const prevTime = prev[2] || 0;
-          const currTime = point.time_ms || 0;
-
-          const dist = distanceMeters(prevLat, prevLng, lat, lng);
-          const timeGap = Math.abs(currTime - prevTime);
-
-          // tune these values if needed
-          if (dist > 80 || timeGap > 5000) {
-            shouldBreak = true;
-          }
-        }
-
-        if (shouldBreak) {
-          segments.push([[lat, lng, point.time_ms || 0]]);
-        } else {
-          currentSegment.push([lat, lng, point.time_ms || 0]);
-        }
-      }
-
-      if (!routeColors.has(point.route_id)) {
-        routeColors.set(point.route_id, color);
-      }
-    }
-
-    for (const [routeId, segments] of routeSegments.entries()) {
-      for (const segment of segments) {
-        if (segment.length <= 1) continue;
-
-        let finalPoints = segment.map((p) => [p[0], p[1]]);
-
-        if (finalPoints.length > 1000) {
-          const step = Math.ceil(finalPoints.length / 1000);
-          finalPoints = [];
-          for (let i = 0; i < segment.length; i += step) {
-            finalPoints.push([segment[i][0], segment[i][1]]);
-          }
-        }
-
-        L.polyline(finalPoints, {
-          renderer: canvasRenderer,
-          color: routeColors.get(routeId) || '#6b7280',
-          weight: 2,
-          opacity: 0.7
-        }).addTo(layer);
-      }
     }
   }
 
@@ -368,7 +297,7 @@ function ingestPoints(newPoints) {
     scheduleRedraw(true);
   }
 }
-const MAX_RENDER_POINTS = 20000;
+const MAX_RENDER_POINTS = 200000;
 const HISTORY_BATCH_SIZE = 10000;
 
 async function loadFullHistory() {
