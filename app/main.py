@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import json
+from collections import defaultdict
 import yaml
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi import Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from app.db import init_db, insert_points, count_points, fetch_points, fetch_sampled_snapshot, clear_points
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BASE_DIR.parent
@@ -59,10 +61,10 @@ class RealTimeMeasurementService:
         self.manager = ConnectionManager()
         self.state = StreamState()
         self.legend_config = self._load_legend_config()
-        self.points: list[dict[str, Any]] = []
         self.available_measurements = list(self.legend_config["legends"].keys())
         self._stream_lock = asyncio.Lock()
         self.next_row_id = 0
+        self.seen_point_keys: set[tuple[Any, ...]] = set()
 
     def _load_legend_config(self) -> dict[str, Any]:
         with self.legend_path.open("r", encoding="utf-8") as handle:
@@ -87,7 +89,7 @@ class RealTimeMeasurementService:
             return ((int(hh) * 3600 + int(mm) * 60 + int(ss)) * 1000) + int(ms)
         except ValueError:
             return None
-
+        
     def _get_row_value(self, row: dict[str, Any], column_name: str) -> Any:
         return row.get(column_name)
     def _build_measurements(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -178,24 +180,26 @@ class RealTimeMeasurementService:
                     self.next_row_id += 1    
                     if point is not None:
                         normalized.append(point)
-
+                normalized = self._deduplicate_points(normalized)
                 self.state.bytes_read += bytes_read
                 self.state.rows_processed += len(normalized)
-                self.points.extend(normalized)
-
+                
                 if normalized:
+                    insert_points(normalized)
                     await self.manager.broadcast(
                         {
                             "type": "chunk",
                             "points": normalized,
-                            "state": self.status_payload(),
+                            "state": {
+                                **self.status_payload(),
+                                "history_points_count": count_points(),
+                            },
                         }
                     )
                 await asyncio.sleep(STREAM_DELAY_SECONDS)
 
             self.state.completed = True
-            await self.manager.broadcast({"type": "completed", "state": self.status_payload()})
-            print("Backend points count:", len(self.points))
+            await self.manager.broadcast({"type": "completed", "state": {**self.status_payload(),"history_points_count": count_points(),},})
 
     def status_payload(self) -> dict[str, Any]:
         file_size = self.data_path.stat().st_size if self.data_path.exists() else 0
@@ -208,15 +212,52 @@ class RealTimeMeasurementService:
             "chunk_size_bytes": CHUNK_SIZE_BYTES,
             "stream_delay_seconds": STREAM_DELAY_SECONDS,
         }
-    
+   
     def current_state_payload(self) -> dict[str, Any]:
+        snapshot = fetch_sampled_snapshot(SNAPSHOT_MAX_POINTS)
         return {
             "legend": self.legend_config,
             "available_measurements": self.available_measurements,
-            "points": self.points,
-            "state": self.status_payload(),
+            "points": snapshot,
+            "state": {
+                **self.status_payload(),
+                "history_points_count": count_points(),
+                "snapshot_points_count": len(snapshot),
+            },
         }
+    
+    def reset_state(self) -> None:
+        self.state = StreamState()
+        self.next_row_id = 0
 
+    def _point_dedupe_key(self, point: dict[str, Any]) -> tuple[Any, ...]:
+        measurements = tuple(
+            (name, point["measurements"].get(name))
+            for name in self.available_measurements
+        )
+
+        return (
+            point.get("time"),
+            point.get("route_id"),
+            round(point.get("lat", 0.0), 8),
+            round(point.get("lng", 0.0), 8),
+            measurements,
+        )
+    
+    def _deduplicate_points(self, points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+
+        for point in points:
+            key = self._point_dedupe_key(point)
+            if key in self.seen_point_keys:
+                continue
+            self.seen_point_keys.add(key)
+            deduped.append(point)
+
+        return deduped
+
+init_db()
+clear_points()
 service = RealTimeMeasurementService(DATA_FILE, LEGEND_FILE)
 app = FastAPI(title="Geo-tagged Real-time Measurements")
 app.add_middleware(
@@ -233,11 +274,21 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 async def index() -> FileResponse:
     return FileResponse(BASE_DIR / "static" / "index.html")
 
+SNAPSHOT_MAX_POINTS = 5000
 
 @app.get("/api/config")
 async def config() -> JSONResponse:
-    return JSONResponse(service.current_state_payload())
-
+    snapshot = fetch_sampled_snapshot(SNAPSHOT_MAX_POINTS)
+    return JSONResponse({
+        "legend": service.legend_config,
+        "available_measurements": service.available_measurements,
+        "points": snapshot,
+        "state": {
+            **service.status_payload(),
+            "history_points_count": count_points(),
+            "snapshot_points_count": len(snapshot),
+        },
+    })
 
 @app.get("/api/status")
 async def status() -> JSONResponse:
@@ -263,9 +314,13 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         service.manager.disconnect(websocket)
 
 @app.get("/api/history")
-async def history(offset: int = 0, limit: int = 10000) -> JSONResponse:
-    total = len(service.points)
-    items = service.points[offset: offset + limit]
+async def history(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(10000, ge=1, le=50000),
+) -> JSONResponse:
+    total = count_points()
+    items = fetch_points(offset=offset, limit=limit)
+
     return JSONResponse({
         "points": items,
         "offset": offset,
@@ -273,6 +328,36 @@ async def history(offset: int = 0, limit: int = 10000) -> JSONResponse:
         "returned": len(items),
         "total": total,
         "has_more": offset + len(items) < total,
+    })
+
+@app.get("/api/history/routes_snapshot")
+async def routes_snapshot() -> JSONResponse:
+    items = fetch_points(offset=0, limit=count_points())
+
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for point in items:
+        grouped[point["route_id"]].append(point)
+
+    routes = []
+    max_points_per_route = 1500
+
+    for route_id, points in grouped.items():
+        if len(points) > max_points_per_route:
+            step = max(1, len(points) // max_points_per_route)
+            sampled = points[::step]
+            if sampled[-1]["id"] != points[-1]["id"]:
+                sampled.append(points[-1])
+        else:
+            sampled = points
+
+        routes.append({
+            "route_id": route_id,
+            "points": sampled,
+        })
+
+    return JSONResponse({
+        "routes": routes,
+        "total_routes": len(routes),
     })
 
 if __name__ == "__main__":

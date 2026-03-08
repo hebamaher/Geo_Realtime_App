@@ -20,6 +20,14 @@ const state = {
   isRestoringHistory: false,
   historyRestored: false,
 };
+
+function ensureHistoryLayer(measurementName) {
+  const key = `history:${measurementName}`;
+  if (!state.historyLayerGroups.has(key)) {
+    state.historyLayerGroups.set(key, L.layerGroup().addTo(map));
+  }
+  return state.historyLayerGroups.get(key);
+}
 console.log('Client points count:', state.points.length);
 const startBtn = document.getElementById('startBtn');
 const statusEl = document.getElementById('status');
@@ -163,13 +171,22 @@ function getVisiblePoints() {
 function redraw() {
   state.layerGroups.forEach((group) => group.clearLayers());
 
-  const visiblePoints = getVisiblePoints();
+  const visiblePoints = getVisiblePoints()
+    .slice()
+    .sort((a, b) => {
+      const routeCompare = String(a.route_id).localeCompare(String(b.route_id));
+      if (routeCompare !== 0) return routeCompare;
+      return (a.time_ms || 0) - (b.time_ms || 0);
+    });
+
   const bounds = [];
   const enabledMeasurements = Array.from(state.enabledMeasurements);
 
   for (const measurementName of enabledMeasurements) {
     const layer = ensureLayer(measurementName);
-    const routePoints = new Map();
+
+    // route_id -> array of segments
+    const routeSegments = new Map();
     const routeColors = new Map();
 
     for (const point of visiblePoints) {
@@ -178,33 +195,72 @@ function redraw() {
 
       const [lat, lng] = offsetPoint(point.lat, point.lng, measurementName);
       const color = getMeasurementColor(measurementName, value);
-      if(!color)
-        continue;
-      L.circleMarker([lat, lng], {renderer: canvasRenderer, radius: 4, color, weight: 1, fillColor: color, fillOpacity: 0.9})
-        .bindTooltip(buildTooltip(point), {sticky: true, direction: 'top', opacity: 0.95})
+      if (!color) continue;
+
+      L.circleMarker([lat, lng], {
+        renderer: canvasRenderer,
+        radius: 4,
+        color,
+        weight: 1,
+        fillColor: color,
+        fillOpacity: 0.9
+      })
+        .bindTooltip(buildTooltip(point), {
+          sticky: true,
+          direction: 'top',
+          opacity: 0.95
+        })
         .addTo(layer);
 
       bounds.push([lat, lng]);
 
-      if (!routePoints.has(point.route_id)) {
-        routePoints.set(point.route_id, []);
+      if (!routeSegments.has(point.route_id)) {
+        routeSegments.set(point.route_id, [[[lat, lng, point.time_ms || 0]]]);
+      } else {
+        const segments = routeSegments.get(point.route_id);
+        const currentSegment = segments[segments.length - 1];
+        const prev = currentSegment[currentSegment.length - 1];
+
+        let shouldBreak = false;
+
+        if (prev) {
+          const prevLat = prev[0];
+          const prevLng = prev[1];
+          const prevTime = prev[2] || 0;
+          const currTime = point.time_ms || 0;
+
+          const dist = distanceMeters(prevLat, prevLng, lat, lng);
+          const timeGap = Math.abs(currTime - prevTime);
+
+          // tune these values if needed
+          if (dist > 80 || timeGap > 5000) {
+            shouldBreak = true;
+          }
+        }
+
+        if (shouldBreak) {
+          segments.push([[lat, lng, point.time_ms || 0]]);
+        } else {
+          currentSegment.push([lat, lng, point.time_ms || 0]);
+        }
       }
-      routePoints.get(point.route_id).push([lat, lng]);
 
       if (!routeColors.has(point.route_id)) {
         routeColors.set(point.route_id, color);
       }
     }
 
-    for (const [routeId, linePoints] of routePoints.entries()) {
-      if (linePoints.length > 1) {
-        let finalPoints = linePoints;
+    for (const [routeId, segments] of routeSegments.entries()) {
+      for (const segment of segments) {
+        if (segment.length <= 1) continue;
 
-        if (linePoints.length > 1000) {
-          const step = Math.ceil(linePoints.length / 1000);
+        let finalPoints = segment.map((p) => [p[0], p[1]]);
+
+        if (finalPoints.length > 1000) {
+          const step = Math.ceil(finalPoints.length / 1000);
           finalPoints = [];
-          for (let i = 0; i < linePoints.length; i += step) {
-            finalPoints.push(linePoints[i]);
+          for (let i = 0; i < segment.length; i += step) {
+            finalPoints.push([segment[i][0], segment[i][1]]);
           }
         }
 
@@ -227,8 +283,22 @@ function redraw() {
   const latest = visibleCount ? visiblePoints[visibleCount - 1].time : '-';
   timeLabel.textContent =
     Number(timeSlider.value) === 100
-      ? `Showing all points (${visibleCount})`
+      ? `Showing points (${visibleCount})`
       : `Showing ${visibleCount} points up to ${latest}`;
+}
+function distanceMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) *
+    Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
 }
 
 function buildTooltip(point) {
@@ -269,10 +339,17 @@ function scheduleRedraw(force = false) {
 }
 
 function updateStatus(status) {
-  statusEl.innerHTML = `<div>Rows processed: <strong>${status.rows_processed}</strong></div><div>Bytes streamed: <strong>${formatBytes(status.bytes_read)}</strong> / ${formatBytes(status.file_size)}</div><div>Chunk size: <strong>${formatBytes(status.chunk_size_bytes)}</strong></div><div>Delay: <strong>${status.stream_delay_seconds}s</strong></div><div>Completed: <strong>${status.completed ? 'Yes' : 'No'}</strong></div>`;
+  statusEl.innerHTML = `
+    <div>Rows processed: <strong>${status.rows_processed ?? 0}</strong></div>
+    <div>Bytes streamed: <strong>${formatBytes(status.bytes_read ?? 0)}</strong> / ${formatBytes(status.file_size ?? 0)}</div>
+    <div>Chunk size: <strong>${formatBytes(status.chunk_size_bytes ?? 0)}</strong></div>
+    <div>Delay: <strong>${status.stream_delay_seconds ?? 0}s</strong></div>
+    <div>Completed: <strong>${status.completed ? 'Yes' : 'No'}</strong></div>
+    <div>Total history: <strong>${status.history_points_count ?? '-'}</strong></div>
+    <div>Rendered snapshot: <strong>${status.snapshot_points_count ?? state.points.length}</strong></div>
+  `;
   if (status.started) startBtn.disabled = true;
 }
-
 function ingestPoints(newPoints) {
   let added = false;
 
@@ -287,13 +364,11 @@ function ingestPoints(newPoints) {
       added = true;
     }
   }
-
   if (added) {
     scheduleRedraw(true);
   }
 }
-
-const MAX_RENDER_POINTS = 10000;
+const MAX_RENDER_POINTS = 20000;
 const HISTORY_BATCH_SIZE = 10000;
 
 async function loadFullHistory() {
@@ -327,6 +402,7 @@ async function loadFullHistory() {
       <div>History loaded: <strong>${offset}</strong> / <strong>${total}</strong></div>
       <div>Batch size: <strong>${payload.limit}</strong></div>
     `;
+
     if (batchCount % 5 === 0) {
       scheduleRedraw(true);
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -343,19 +419,20 @@ async function loadFullHistory() {
 async function bootstrap() {
   const response = await fetch('/api/config');
   const payload = await response.json();
+
   state.legend = payload.legend;
-  state.points = payload.points || [];
-  state.pointIds = new Set(state.points.map((p) => p.id));
-  state.maxTimeMs = 0;
-  for (const p of state.points) {
-    const t = p.time_ms || 0;
-    if (t > state.maxTimeMs) state.maxTimeMs = t;
-  }
   state.enabledMeasurements = new Set(payload.available_measurements || []);
   updateStatus(payload.state);
   renderMeasurementToggles();
   renderLegend();
-  redraw();
+
+  state.points = [];
+  state.pointIds = new Set();
+  state.maxTimeMs = 0;
+  state.hasFitBounds = false;
+
+  ingestPoints(payload.points || []);
+  scheduleRedraw(true);
 
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
   const socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
@@ -365,20 +442,10 @@ async function bootstrap() {
 
     if (payload.type === 'snapshot') {
       state.legend = payload.legend;
-      state.points = payload.points || [];
-      state.pointIds = new Set(state.points.map((p) => p.id));
-      state.maxTimeMs = 0;
-
-      for (const p of state.points) {
-        const t = p.time_ms || 0;
-        if (t > state.maxTimeMs) state.maxTimeMs = t;
-      }
-
       state.enabledMeasurements = new Set(payload.available_measurements || []);
       renderMeasurementToggles();
       renderLegend();
       updateStatus(payload.state);
-      scheduleRedraw(true);
     }
 
     if (payload.type === 'chunk') {
