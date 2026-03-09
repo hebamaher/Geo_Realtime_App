@@ -20,14 +20,6 @@ const state = {
   isRestoringHistory: false,
   historyRestored: false,
 };
-
-function ensureHistoryLayer(measurementName) {
-  const key = `history:${measurementName}`;
-  if (!state.historyLayerGroups.has(key)) {
-    state.historyLayerGroups.set(key, L.layerGroup().addTo(map));
-  }
-  return state.historyLayerGroups.get(key);
-}
 console.log('Client points count:', state.points.length);
 const startBtn = document.getElementById('startBtn');
 const statusEl = document.getElementById('status');
@@ -37,7 +29,7 @@ const legendEl = document.getElementById('legend');
 const togglesEl = document.getElementById('measurementToggles');
 const zoomInput = document.getElementById('zoomInput');
 const zoomValue = document.getElementById('zoomValue');
-
+// converts raw byte counts into a human-readable string.
 function formatBytes(bytes) {
   if (!bytes) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -46,48 +38,52 @@ function formatBytes(bytes) {
   while (value >= 1024 && i < units.length - 1) { value /= 1024; i += 1; }
   return `${value.toFixed(1)} ${units[i]}`;
 }
-
+// decides what color a point should have.
 function getMeasurementColor(measurementName, value) {
+  // get the config for this measurement
   const config = state.legend.legends[measurementName];
+  // If the measurement is not in the legend, don’t draw it
   if (!config) return null;
 
   if (config.type === 'numeric') {
     const num = Number(value);
     if (Number.isNaN(num)) return null;
-
+    // find the threshold range it belongs to, return that threshold’s color
     const match = config.thresholds.find((item) => num >= item.min && num < item.max);
+    // If the value does not match any range, return null
     return match ? match.color : null;
   }
-
+  // normalize the text, compare it against the configured discrete values
   const normalizedValue = String(value ?? '').trim().toUpperCase();
   const discrete = config.thresholds.find(
     (item) => String(item.value ?? '').trim().toUpperCase() === normalizedValue
   );
-
   return discrete ? discrete.color : null;
 }
-
+// gives each measurement a small numeric index.
 function getMeasurementOffsetIndex(measurementName) {
   const enabled = Array.from(state.legend ? Object.keys(state.legend.legends) : []);
   const index = enabled.indexOf(measurementName);
   return index >= 0 ? index : 0;
 }
-
+// adds a very small offset to latitude and longitude.
 function offsetPoint(lat, lng, measurementName) {
   const index = getMeasurementOffsetIndex(measurementName);
   return [lat + (index * 0.00009), lng + (index * 0.00006)];
 }
-
+// creates HTML content for a tooltip
 function buildPopup(point, measurementName) {
   const value = point.measurements[measurementName];
-  return `<strong>${measurementName}</strong><br>Time: ${point.time || '-'}<br>Route: ${point.route_id}<br>Value: ${value ?? '-'}<br>Lat/Lng: ${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}`;
-}
+  // return `<strong>${measurementName}</strong><br>Time: ${point.time || '-'}<br>Route: ${point.route_id}<br>Value: ${value ?? '-'}<br>Lat/Lng: ${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}`;
+  return `<strong>${measurementName}</strong><br>Time: ${point.time || '-'}<br>Route: ${point.route_id}<br>Lat/Lng: ${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}`;
 
+}
+// creates or retrieves the Leaflet LayerGroup for a measurement to clear and redraw only the relevant measurement layer when needed.
 function ensureLayer(measurementName) {
   if (!state.layerGroups.has(measurementName)) state.layerGroups.set(measurementName, L.layerGroup().addTo(map));
   return state.layerGroups.get(measurementName);
 }
-
+// builds legend blocks only for the currently enabled measurements.
 function renderLegend() {
   legendEl.innerHTML = '';
   Object.entries(state.legend.legends).forEach(([name, config]) => {
@@ -107,7 +103,7 @@ function renderLegend() {
     legendEl.appendChild(wrapper);
   });
 }
-
+// creates the checkbox list for turning measurements on/off.
 function renderMeasurementToggles() {
   togglesEl.innerHTML = '';
   Object.entries(state.legend.legends).forEach(([name, config]) => {
@@ -118,25 +114,31 @@ function renderMeasurementToggles() {
     togglesEl.appendChild(row);
   });
   togglesEl.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+    // When a user checks/unchecks a measurement, update state.enabledMeasurements, , call scheduleRedraw(true)
     input.addEventListener('change', (event) => {
       const measurement = event.target.dataset.measurement;
       if (event.target.checked) state.enabledMeasurements.add(measurement);
       else state.enabledMeasurements.delete(measurement);
+      // re-render the legend
       renderLegend();
+      // the map and legend update to match the toggles.
       scheduleRedraw(true);
     });
   });
 }
-
+// decides which points should currently be drawn
 function getVisiblePoints() {
+  // 1. if no points exist, return empty list
   if (!state.points.length) return [];
-
+  // 2. apply time filter
   const sliderValue = Number(timeSlider.value);
   let visible;
 
   if (sliderValue === 100) {
+    // return all points
     visible = state.points;
   } else {
+    // compute a threshold time 
     const threshold = Math.floor((sliderValue / 100) * state.maxTimeMs);
 
     let low = 0;
@@ -146,7 +148,7 @@ function getVisiblePoints() {
     while (low <= high) {
       const mid = Math.floor((low + high) / 2);
       const t = state.points[mid].time_ms || 0;
-
+      // include points whose time_ms <= threshold
       if (t <= threshold) {
         lastValidIndex = mid;
         low = mid + 1;
@@ -157,11 +159,13 @@ function getVisiblePoints() {
 
     visible = lastValidIndex >= 0 ? state.points.slice(0, lastValidIndex + 1) : [];
   }
-
-  if (visible.length <= MAX_RENDER_POINTS) return visible;
-
+  // 3. sampling for performance
+  // ff visible points are below the limit, return them all
+  if (visible.length <= MAX_RENDER_POINTS) return visible; 
+  // compute a step size
   const step = Math.ceil(visible.length / MAX_RENDER_POINTS);
   const sampled = [];
+  // keep every Nth point
   for (let i = 0; i < visible.length; i += step) {
     sampled.push(visible[i]);
   }
@@ -169,6 +173,7 @@ function getVisiblePoints() {
 }
 
 function redraw() {
+  // 1. clear all current layers
   state.layerGroups.forEach((group) => group.clearLayers());
 
   const visiblePoints = getVisiblePoints();
@@ -177,7 +182,7 @@ function redraw() {
 
   // optional: only enable tooltips when point count is not huge
   const enableTooltips = visiblePoints.length <= 3000;
-
+  // Draw each measurement separately.
   for (const measurementName of enabledMeasurements) {
     const layer = ensureLayer(measurementName);
 
@@ -196,9 +201,10 @@ function redraw() {
         weight: 1,
         fillColor: color,
         fillOpacity: 0.9
-      });
-
-      marker.addTo(layer);
+      })
+      .bindTooltip(buildTooltip(point), {sticky: true, direction: 'top', opacity: 0.95})
+      .addTo(layer);
+      // stores all drawn point positions so the map can later fit to them.
       bounds.push([lat, lng]);
     }
   }
@@ -207,27 +213,13 @@ function redraw() {
     map.fitBounds(bounds, { padding: [20, 20], maxZoom: state.defaultZoom });
     state.hasFitBounds = true;
   }
-
+  // updates the label beside the time slider.
   const visibleCount = visiblePoints.length;
   const latest = visibleCount ? visiblePoints[visibleCount - 1].time : '-';
   timeLabel.textContent =
     Number(timeSlider.value) === 100
       ? `Showing points (${visibleCount})`
       : `Showing ${visibleCount} points up to ${latest}`;
-}
-function distanceMeters(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * Math.PI / 180) *
-    Math.cos(lat2 * Math.PI / 180) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
-
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
 }
 
 function buildTooltip(point) {
@@ -237,11 +229,11 @@ function buildTooltip(point) {
     `<strong>Lat/Lng:</strong> ${Number(point.lat).toFixed(6)}, ${Number(point.lng).toFixed(6)}`
   ];
 
-  const measurements = point.measurements || {};
-  for (const [name, value] of Object.entries(measurements)) {
-    if (value === null || value === undefined || value === '') continue;
-    lines.push(`<strong>${name}:</strong> ${value}`);
-  }
+  // const measurements = point.measurements || {};
+  // for (const [name, value] of Object.entries(measurements)) {
+  //   if (value === null || value === undefined || value === '') continue;
+  //   lines.push(`<strong>${name}:</strong> ${value}`);
+  // }
 
   return lines.join('<br>');
 }
@@ -252,14 +244,14 @@ const REDRAW_INTERVAL_MS = 1000;
 
 function scheduleRedraw(force = false) {
   const now = Date.now();
-
+  // If redraws are happening too frequently, skip this one.
   if (!force && now - lastRedrawAt < REDRAW_INTERVAL_MS) {
     return;
   }
 
   if (redrawScheduled) return;
   redrawScheduled = true;
-
+  // lets the browser choose a suitable frame for the redraw fo performance optimization.
   requestAnimationFrame(() => {
     redrawScheduled = false;
     lastRedrawAt = Date.now();
@@ -277,12 +269,15 @@ function updateStatus(status) {
     <div>Total history: <strong>${status.history_points_count ?? '-'}</strong></div>
     <div>Rendered snapshot: <strong>${status.snapshot_points_count ?? state.points.length}</strong></div>
   `;
+  // disable start streaming button if streaming is already started
   if (status.started) startBtn.disabled = true;
 }
+// takes new points from the backend and stores them in the frontend state.
 function ingestPoints(newPoints) {
   let added = false;
 
   for (const point of newPoints) {
+    // if pointId is not seen add to state.points
     if (!state.pointIds.has(point.id)) {
       state.pointIds.add(point.id);
       state.points.push(point);
@@ -297,7 +292,7 @@ function ingestPoints(newPoints) {
     scheduleRedraw(true);
   }
 }
-const MAX_RENDER_POINTS = 200000;
+const MAX_RENDER_POINTS = 20000;
 const HISTORY_BATCH_SIZE = 10000;
 
 async function loadFullHistory() {
@@ -344,31 +339,33 @@ async function loadFullHistory() {
 
   console.log("history restore done. last batch:", lastReturned, "total loaded:", offset);
 }
-
+// initializes the app when the page loads.
 async function bootstrap() {
+  // 1. fetch configs
   const response = await fetch('/api/config');
   const payload = await response.json();
-
+  // 2. sets frontend config
   state.legend = payload.legend;
   state.enabledMeasurements = new Set(payload.available_measurements || []);
   updateStatus(payload.state);
   renderMeasurementToggles();
   renderLegend();
-
-  state.points = [];
-  state.pointIds = new Set();
-  state.maxTimeMs = 0;
-  state.hasFitBounds = false;
-
-  ingestPoints(payload.points || []);
-  scheduleRedraw(true);
-
+  // 3. clears old frontend state before inserting the fetched snapshot.
+  // state.points = [];
+  // state.pointIds = new Set();
+  // state.maxTimeMs = 0;
+  // state.hasFitBounds = false;
+  await loadFullHistory();
+  // // 4. adds the initial points and forces a redraw.
+  // ingestPoints(payload.points || []);
+  // scheduleRedraw(true);
+  // 5. opens the live stream channel.
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
   const socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
-
+  // 6. handle WebSocket messages
   socket.addEventListener('message', (event) => {
     const payload = JSON.parse(event.data);
-
+    // Updates legend and status.
     if (payload.type === 'snapshot') {
       state.legend = payload.legend;
       state.enabledMeasurements = new Set(payload.available_measurements || []);
@@ -376,12 +373,12 @@ async function bootstrap() {
       renderLegend();
       updateStatus(payload.state);
     }
-
+    // Adds incoming streamed points and updates status
     if (payload.type === 'chunk') {
       ingestPoints(payload.points || []);
       updateStatus(payload.state);
     }
-
+    // Marks stream complete in the UI.
     if (payload.type === 'completed') {
       updateStatus(payload.state);
     }
