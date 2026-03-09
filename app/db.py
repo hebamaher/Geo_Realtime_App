@@ -151,3 +151,45 @@ def clear_points() -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def save_legend_config(config: dict) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS app_config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    cur.execute("""
+        INSERT INTO app_config (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    """, ("legend_config", json.dumps(config)))
+    conn.commit()
+    conn.close()
+
+def load_legend_config_from_db() -> dict | None:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS app_config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    cur.execute("SELECT value FROM app_config WHERE key = ?", ("legend_config",))
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+    return json.loads(row[0])
+
+def delete_legend_config() -> None:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM app_config WHERE key = ?", ("legend_config",))
+    conn.commit()
+    conn.close()

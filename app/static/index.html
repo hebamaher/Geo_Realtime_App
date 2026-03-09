@@ -12,35 +12,55 @@
     <aside class="sidebar">
       <div>
         <h1>Real-time map</h1>
-        <p class="muted">10 MB chunk streaming, live route drawing, time filtering, and YAML-driven legend controls.</p>
-      </div>
+          <p class="muted">10 MB chunk streaming, time filtering, and editable legend controls.</p>      
+  </div>
+
       <div class="panel">
         <button id="startBtn">Start streaming</button>
         <div id="status" class="status"></div>
       </div>
+
       <div class="panel">
         <label for="zoomInput">Default zoom</label>
         <input id="zoomInput" type="range" min="10" max="18" value="15" />
         <div class="small" id="zoomValue">15</div>
       </div>
+
       <div class="panel">
         <label for="timeSlider">Time filter</label>
         <input id="timeSlider" type="range" min="0" max="100" value="100" />
         <div class="small" id="timeLabel">Showing all points</div>
       </div>
+
       <div class="panel">
         <h2>Measurements</h2>
         <div id="measurementToggles" class="stack"></div>
       </div>
+
       <div class="panel">
         <h2>Legend</h2>
         <div id="legend"></div>
+        <button id="legendSettingsBtn" type="button">Legend Settings</button>
       </div>
     </aside>
+
     <main class="map-shell">
       <div id="map"></div>
     </main>
   </div>
+
+  <div id="legendEditorModal" style="display:none;">
+    <div class="panel">
+      <h2>Legend Settings</h2>
+      <div id="legendEditorContent"></div>
+      <div class="stack">
+        <button id="saveLegendBtn" type="button">Save</button>
+        <button id="resetLegendBtn" type="button">Reset to Default</button>
+        <button id="closeLegendBtn" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="/static/app.js"></script>
 </body>

@@ -29,6 +29,243 @@ const legendEl = document.getElementById('legend');
 const togglesEl = document.getElementById('measurementToggles');
 const zoomInput = document.getElementById('zoomInput');
 const zoomValue = document.getElementById('zoomValue');
+let editableLegend = null;
+const legendSettingsBtn = document.getElementById('legendSettingsBtn');
+const legendEditorModal = document.getElementById('legendEditorModal');
+const legendEditorContent = document.getElementById('legendEditorContent');
+const saveLegendBtn = document.getElementById('saveLegendBtn');
+const resetLegendBtn = document.getElementById('resetLegendBtn');
+const closeLegendBtn = document.getElementById('closeLegendBtn');
+
+legendSettingsBtn.addEventListener('click', async () => {
+  const response = await fetch('/api/legend');
+  editableLegend = await response.json();
+  renderLegendEditor();
+  legendEditorModal.style.display = 'flex';
+});
+
+closeLegendBtn.addEventListener('click', () => {
+  legendEditorModal.style.display = 'none';
+});
+
+function renderLegendEditor() {
+  legendEditorContent.innerHTML = '';
+
+  Object.entries(editableLegend.legends).forEach(([name, config]) => {
+    const block = document.createElement('div');
+    block.className = 'legend-editor-block';
+
+    let html = `<h4>${name}</h4>`;
+    html += `<div class="type-label">Type: ${config.type}</div>`;
+
+    config.thresholds.forEach((t, index) => {
+      if (config.type === 'numeric') {
+        html += `
+          <div class="threshold-row threshold-row-with-actions">
+            <input data-name="${name}" data-index="${index}" data-field="min" value="${t.min}" placeholder="Min">
+            <input data-name="${name}" data-index="${index}" data-field="max" value="${t.max}" placeholder="Max">
+            <input data-name="${name}" data-index="${index}" data-field="color" value="${t.color}" placeholder="Color">
+            <input data-name="${name}" data-index="${index}" data-field="label" value="${t.label || ''}" placeholder="Label">
+            <button
+              type="button"
+              class="remove-threshold-btn"
+              data-name="${name}"
+              data-index="${index}"
+            >
+              Remove
+            </button>
+          </div>
+        `;
+      } else {
+        html += `
+          <div class="threshold-row threshold-row-with-actions">
+            <input data-name="${name}" data-index="${index}" data-field="value" value="${t.value}" placeholder="Value">
+            <input data-name="${name}" data-index="${index}" data-field="color" value="${t.color}" placeholder="Color">
+            <input data-name="${name}" data-index="${index}" data-field="label" value="${t.label || ''}" placeholder="Label">
+            <button
+              type="button"
+              class="remove-threshold-btn"
+              data-name="${name}"
+              data-index="${index}"
+            >
+              Remove
+            </button>
+          </div>
+        `;
+      }
+    });
+
+    html += `
+      <div class="threshold-actions">
+        <button type="button" class="add-threshold-btn" data-name="${name}">
+          Add Row
+        </button>
+      </div>
+    `;
+
+    block.innerHTML = html;
+    legendEditorContent.appendChild(block);
+  });
+
+  legendEditorContent.querySelectorAll('input').forEach((input) => {
+    input.addEventListener('input', handleLegendEditorInput);
+  });
+
+  legendEditorContent.querySelectorAll('.add-threshold-btn').forEach((btn) => {
+    btn.addEventListener('click', handleAddThresholdRow);
+  });
+
+  legendEditorContent.querySelectorAll('.remove-threshold-btn').forEach((btn) => {
+    btn.addEventListener('click', handleRemoveThresholdRow);
+  });
+}
+
+saveLegendBtn.addEventListener('click', async () => {
+
+  const errors = validateLegendConfig(editableLegend);
+
+  if (errors.length > 0) {
+    alert(errors.join("\n"));
+    return;
+  }
+
+  const response = await fetch('/api/legend', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(editableLegend)
+  });
+
+  const payload = await response.json();
+
+  state.legend = payload.legend;
+  state.enabledMeasurements = new Set(payload.available_measurements || Object.keys(payload.legend.legends));
+
+  renderMeasurementToggles();
+  renderLegend();
+  scheduleRedraw(true);
+
+  legendEditorModal.style.display = 'none';
+});
+
+resetLegendBtn.addEventListener('click', async () => {
+  const response = await fetch('/api/legend/reset', { method: 'POST' });
+  const payload = await response.json();
+
+  state.legend = payload.legend;
+  editableLegend = payload.legend;
+  state.enabledMeasurements = new Set(
+    payload.available_measurements || Object.keys(payload.legend.legends)
+  );
+
+  renderLegendEditor();
+  renderMeasurementToggles();
+  renderLegend();
+  scheduleRedraw(true);
+});
+
+function handleLegendEditorInput(event) {
+  const input = event.target;
+  const name = input.dataset.name;
+  const index = Number(input.dataset.index);
+  const field = input.dataset.field;
+
+  let value = input.value;
+  const config = editableLegend.legends[name];
+
+  if (config.type === 'numeric' && (field === 'min' || field === 'max')) {
+    if (value === 'infinity') value = 'infinity';
+    else if (value === '-infinity') value = '-infinity';
+    else value = Number(value);
+  }
+
+  config.thresholds[index][field] = value;
+}
+
+function handleAddThresholdRow(event) {
+  const name = event.target.dataset.name;
+  const config = editableLegend.legends[name];
+
+  if (config.type === 'numeric') {
+    config.thresholds.push({
+      min: 0,
+      max: 0,
+      color: '#9ca3af',
+      label: ''
+    });
+  } else {
+    config.thresholds.push({
+      value: '',
+      color: '#9ca3af',
+      label: ''
+    });
+  }
+
+  renderLegendEditor();
+}
+
+function handleRemoveThresholdRow(event) {
+  const name = event.target.dataset.name;
+  const index = Number(event.target.dataset.index);
+  const config = editableLegend.legends[name];
+
+  if (!config.thresholds || config.thresholds.length <= 1) {
+    alert('Each measurement must keep at least one threshold row.');
+    return;
+  }
+
+  config.thresholds.splice(index, 1);
+  renderLegendEditor();
+}
+
+function validateLegendConfig(legend) {
+  const errors = [];
+
+  for (const [name, config] of Object.entries(legend.legends)) {
+
+    if (!config.thresholds || config.thresholds.length === 0) {
+      errors.push(`${name} must have at least one threshold row.`);
+      continue;
+    }
+
+    if (config.type === 'numeric') {
+
+      config.thresholds.forEach((row, i) => {
+        const min = row.min;
+        const max = row.max;
+
+        const validMin = min === 'infinity' || min === '-infinity' || !Number.isNaN(Number(min));
+        const validMax = max === 'infinity' || max === '-infinity' || !Number.isNaN(Number(max));
+
+        if (!validMin) errors.push(`${name} row ${i+1}: invalid min value`);
+        if (!validMax) errors.push(`${name} row ${i+1}: invalid max value`);
+
+        if (!row.color) errors.push(`${name} row ${i+1}: color is required`);
+      });
+
+    } else {
+
+      const values = new Set();
+
+      config.thresholds.forEach((row, i) => {
+
+        if (!row.value) {
+          errors.push(`${name} row ${i+1}: value is required`);
+        }
+
+        if (values.has(row.value)) {
+          errors.push(`${name} row ${i+1}: duplicate value "${row.value}"`);
+        }
+
+        values.add(row.value);
+
+        if (!row.color) errors.push(`${name} row ${i+1}: color is required`);
+      });
+    }
+  }
+
+  return errors;
+}
+
 // converts raw byte counts into a human-readable string.
 function formatBytes(bytes) {
   if (!bytes) return '0 B';
@@ -38,21 +275,36 @@ function formatBytes(bytes) {
   while (value >= 1024 && i < units.length - 1) { value /= 1024; i += 1; }
   return `${value.toFixed(1)} ${units[i]}`;
 }
+function normalizeThresholdValue(v) {
+  if (v === 'infinity') return Infinity;
+  if (v === '-infinity') return -Infinity;
+  return Number(v);
+}
 // decides what color a point should have.
 function getMeasurementColor(measurementName, value) {
   // get the config for this measurement
   const config = state.legend.legends[measurementName];
-  // If the measurement is not in the legend, don’t draw it
-  if (!config) return null;
+  // If the measurement is not in the legend, draw it in gray
+  if (!config) return '#9ca3af';;
 
   if (config.type === 'numeric') {
     const num = Number(value);
     if (Number.isNaN(num)) return null;
-    // find the threshold range it belongs to, return that threshold’s color
-    const match = config.thresholds.find((item) => num >= item.min && num < item.max);
-    // If the value does not match any range, return null
+    
+    const match = config.thresholds.find((item) => {
+      const min = normalizeThresholdValue(item.min);
+      const max = normalizeThresholdValue(item.max);
+      return num >= min && num < max;
+    });
+
     return match ? match.color : null;
   }
+    // find the threshold range it belongs to, return that threshold’s color
+    // const match = config.thresholds.find((item) => num >= item.min && num < item.max);
+    // If the value does not match any range, return null
+    // return match ? match.color : null;
+  if (value === null || value === undefined || value === '') return null;
+
   // normalize the text, compare it against the configured discrete values
   const normalizedValue = String(value ?? '').trim().toUpperCase();
   const discrete = config.thresholds.find(
@@ -60,6 +312,7 @@ function getMeasurementColor(measurementName, value) {
   );
   return discrete ? discrete.color : null;
 }
+
 // gives each measurement a small numeric index.
 function getMeasurementOffsetIndex(measurementName) {
   const enabled = Array.from(state.legend ? Object.keys(state.legend.legends) : []);
@@ -160,7 +413,7 @@ function getVisiblePoints() {
     visible = lastValidIndex >= 0 ? state.points.slice(0, lastValidIndex + 1) : [];
   }
   // 3. sampling for performance
-  // ff visible points are below the limit, return them all
+  // if visible points are below the limit, return them all
   if (visible.length <= MAX_RENDER_POINTS) return visible; 
   // compute a step size
   const step = Math.ceil(visible.length / MAX_RENDER_POINTS);
@@ -189,6 +442,8 @@ function redraw() {
     for (const point of visiblePoints) {
       const value = point.measurements?.[measurementName];
       if (value === null || value === undefined || value === '') continue;
+      // if (point.lat === null || point.lat === undefined || point.lng === null || point.lng === undefined) continue;
+      // if (point.time_ms === null || point.time_ms === undefined) continue;
 
       const [lat, lng] = offsetPoint(point.lat, point.lng, measurementName);
       const color = getMeasurementColor(measurementName, value);
@@ -216,10 +471,7 @@ function redraw() {
   // updates the label beside the time slider.
   const visibleCount = visiblePoints.length;
   const latest = visibleCount ? visiblePoints[visibleCount - 1].time : '-';
-  timeLabel.textContent =
-    Number(timeSlider.value) === 100
-      ? `Showing points (${visibleCount})`
-      : `Showing ${visibleCount} points up to ${latest}`;
+  timeLabel.textContent = `Showing points up to ${latest}`;
 }
 
 function buildTooltip(point) {
@@ -261,13 +513,10 @@ function scheduleRedraw(force = false) {
 
 function updateStatus(status) {
   statusEl.innerHTML = `
-    <div>Rows processed: <strong>${status.rows_processed ?? 0}</strong></div>
     <div>Bytes streamed: <strong>${formatBytes(status.bytes_read ?? 0)}</strong> / ${formatBytes(status.file_size ?? 0)}</div>
     <div>Chunk size: <strong>${formatBytes(status.chunk_size_bytes ?? 0)}</strong></div>
     <div>Delay: <strong>${status.stream_delay_seconds ?? 0}s</strong></div>
     <div>Completed: <strong>${status.completed ? 'Yes' : 'No'}</strong></div>
-    <div>Total history: <strong>${status.history_points_count ?? '-'}</strong></div>
-    <div>Rendered snapshot: <strong>${status.snapshot_points_count ?? state.points.length}</strong></div>
   `;
   // disable start streaming button if streaming is already started
   if (status.started) startBtn.disabled = true;
@@ -351,14 +600,14 @@ async function bootstrap() {
   renderMeasurementToggles();
   renderLegend();
   // 3. clears old frontend state before inserting the fetched snapshot.
-  // state.points = [];
-  // state.pointIds = new Set();
-  // state.maxTimeMs = 0;
-  // state.hasFitBounds = false;
-  await loadFullHistory();
+  state.points = [];
+  state.pointIds = new Set();
+  state.maxTimeMs = 0;
+  state.hasFitBounds = false;
+  // await loadFullHistory();
   // // 4. adds the initial points and forces a redraw.
-  // ingestPoints(payload.points || []);
-  // scheduleRedraw(true);
+  ingestPoints(payload.points || []);
+  scheduleRedraw(true);
   // 5. opens the live stream channel.
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
   const socket = new WebSocket(`${protocol}://${window.location.host}/ws`);

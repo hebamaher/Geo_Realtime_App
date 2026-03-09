@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
-from app.db import init_db, insert_points, count_points, fetch_points, fetch_sampled_snapshot, clear_points
+from app.db import init_db, insert_points, count_points, fetch_points, fetch_sampled_snapshot, clear_points, save_legend_config, load_legend_config_from_db
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BASE_DIR.parent
@@ -61,7 +61,8 @@ class RealTimeMeasurementService:
         self.legend_path = legend_path
         self.manager = ConnectionManager()
         self.state = StreamState()
-        self.legend_config = self._load_legend_config()
+        # self.legend_config = self._load_legend_config()
+        self.legend_config = self._load_active_legend_config()
         self.available_measurements = list(self.legend_config["legends"].keys())
         # prevents multiple simultaneous streaming runs
         self._stream_lock = asyncio.Lock()
@@ -73,6 +74,15 @@ class RealTimeMeasurementService:
     def _load_legend_config(self) -> dict[str, Any]:
         with self.legend_path.open("r", encoding="utf-8") as handle:
             return yaml.safe_load(handle)
+    
+    def _load_active_legend_config(self) -> dict[str, Any]:
+        db_config = load_legend_config_from_db()
+        if db_config:
+            return db_config
+
+        yaml_config = self._load_legend_config()
+        save_legend_config(yaml_config)
+        return yaml_config
     # parsing numeric file fields to convert them to float 
     @staticmethod
     def _safe_float(value: Any) -> float | None:
@@ -248,7 +258,6 @@ class RealTimeMeasurementService:
             (name, point["measurements"].get(name))
             for name in self.available_measurements
         )
-
         return (
             point.get("time"),
             point.get("route_id"),
@@ -260,16 +269,40 @@ class RealTimeMeasurementService:
     # reduces repeated rows dramatically before they are stored and streamed.
     def _deduplicate_points(self, points: list[dict[str, Any]]) -> list[dict[str, Any]]:
         deduped: list[dict[str, Any]] = []
-
         for point in points:
             key = self._point_dedupe_key(point)
             if key in self.seen_point_keys:
                 continue
             self.seen_point_keys.add(key)
             deduped.append(point)
-
         return deduped
 
+def validate_legend_config(config: dict):
+    if "legends" not in config:
+        raise ValueError("Missing legends section")
+    for name, legend in config["legends"].items():
+        if "type" not in legend:
+            raise ValueError(f"{name}: missing type")
+        if legend["type"] not in ["numeric", "discrete"]:
+            raise ValueError(f"{name}: invalid type")
+        thresholds = legend.get("thresholds", [])
+        if not thresholds:
+            raise ValueError(f"{name}: must have at least one threshold")
+        if legend["type"] == "numeric":
+            for i, row in enumerate(thresholds):
+                if "min" not in row or "max" not in row:
+                    raise ValueError(f"{name} row {i+1}: min/max missing")
+                if "color" not in row:
+                    raise ValueError(f"{name} row {i+1}: color missing")
+        else:
+            seen = set()
+            for i, row in enumerate(thresholds):
+                val = row.get("value")
+                if val is None:
+                    raise ValueError(f"{name} row {i+1}: value missing")
+                if val in seen:
+                    raise ValueError(f"{name}: duplicate value {val}")
+                seen.add(val)
 init_db()
 clear_points()
 service = RealTimeMeasurementService(DATA_FILE, LEGEND_FILE)
@@ -288,7 +321,7 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 async def index() -> FileResponse:
     return FileResponse(BASE_DIR / "static" / "index.html")
 
-SNAPSHOT_MAX_POINTS = 20000
+SNAPSHOT_MAX_POINTS = 40000
 
 @app.get("/api/config")
 # Returns: legend, available_measurements, sampled_snapshot, current_status, history_count
@@ -347,35 +380,42 @@ async def history(
         "has_more": offset + len(items) < total,
     })
 
-# @app.get("/api/history/routes_snapshot")
-# async def routes_snapshot() -> JSONResponse:
-#     items = fetch_points(offset=0, limit=count_points())
+@app.get("/api/legend")
+async def get_legend() -> JSONResponse:
+    return JSONResponse(service.legend_config)
 
-#     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-#     for point in items:
-#         grouped[point["route_id"]].append(point)
+from fastapi import Body
 
-#     routes = []
-#     max_points_per_route = 1500
+@app.put("/api/legend")
+async def update_legend(payload: dict):
 
-#     for route_id, points in grouped.items():
-#         if len(points) > max_points_per_route:
-#             step = max(1, len(points) // max_points_per_route)
-#             sampled = points[::step]
-#             if sampled[-1]["id"] != points[-1]["id"]:
-#                 sampled.append(points[-1])
-#         else:
-#             sampled = points
+    try:
+        validate_legend_config(payload)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
-#         routes.append({
-#             "route_id": route_id,
-#             "points": sampled,
-#         })
+    save_legend_config(payload)
 
-#     return JSONResponse({
-#         "routes": routes,
-#         "total_routes": len(routes),
-#     })
+    service.legend_config = payload
+    service.available_measurements = list(payload["legends"].keys())
+
+    return {
+        "legend": payload,
+        "available_measurements": service.available_measurements,
+    }
+
+@app.post("/api/legend/reset")
+async def reset_legend() -> JSONResponse:
+    yaml_config = service._load_legend_config()
+    save_legend_config(yaml_config)
+    service.legend_config = yaml_config
+    service.available_measurements = list(yaml_config["legends"].keys())
+
+    return JSONResponse({
+        "message": "Legend reset to defaults",
+        "legend": service.legend_config,
+        "available_measurements": service.available_measurements,
+    })
 
 if __name__ == "__main__":
     import uvicorn
