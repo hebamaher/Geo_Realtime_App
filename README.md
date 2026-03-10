@@ -58,31 +58,31 @@ project/
 ```
 ## How It Works
 1. File Streaming
-The backend reads the .FMT file in 10 MB chunks instead of loading the whole file into memory at once.
+    - The backend reads the .FMT file in 10 MB chunks instead of loading the whole file into memory at once.
 
 2. Row Normalization
 
 3. Deduplication
-- Points are deduplicated using a composite key based on:
-    - time
-    - route ID
-    - rounded latitude
-    - rounded longitude
-    - measurement values
+    - Points are deduplicated using a composite key based on:
+        - time
+        - route ID
+        - rounded latitude
+        - rounded longitude
+        - measurement values
 
 4. Persistence
-Deduplicated points are inserted into the database so they can be restored later.
+    - Deduplicated points are inserted into the database so they can be restored later.
 
 5. Live Broadcast
-New points are pushed to all connected clients using WebSocket.
+    - New points are pushed to all connected clients using WebSocket.
 
 6. Frontend Rendering
-- The frontend:
-  - loads legend configuration
-  - loads an initial sampled snapshot
-  - listens for live chunks
-  - draws enabled measurements on the map
-  - applies time-range filters and legend colors
+   - The frontend:
+      - loads legend configuration
+      - loads an initial sampled snapshot
+      - listens for live chunks
+      - draws enabled measurements on the map
+      - applies time-range filters and legend colors
 
 ### Backend API
 - GET /
@@ -135,23 +135,23 @@ New points are pushed to all connected clients using WebSocket.
 - Supports auto-fit and configurable zoom
 
 **Measurement Toggle Panel**
-Users can enable or disable which measurements are shown.
+- Users can enable or disable which measurements are shown.
 
 **Time Range Filter**
-Two sliders allow filtering points:
+- Two sliders allow filtering points:
   - From
   - To
 
 **Legend Editor**
-Users can:
-- edit numeric/discrete thresholds
-- change colors and labels
-- add threshold rows
-- remove threshold rows
-- reset the legend to defaults
+- Users can:
+    - edit numeric/discrete thresholds
+    - change colors and labels
+    - add threshold rows
+    - remove threshold rows
+    - reset the legend to defaults
   
 **Auto Follow**
-The map can follow the latest streamed point as new data arrives.
+- The map can follow the latest streamed point as new data arrives.
 
 **Legend Configuration**
 The default legend is loaded from:
@@ -164,14 +164,14 @@ Supported legend types:
 - Discrete
 
 ## Database Role
-The database is used to:
-- store deduplicated points
-- support restoring history after refresh
-- provide paginated access to old points
-- store the editable legend configuration
+- The database is used to:
+    - store deduplicated points
+    - support restoring history after refresh
+    - provide paginated access to old points
+    - store the editable legend configuration
 
 ## Running the Project
-1. Create and activate a virtual environment
+**1. Create and activate a virtual environment**
 - Windows PowerShell
 ```text
 python -m venv .venv
@@ -183,23 +183,23 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-2. Install dependencies
+**2. Install dependencies**
 ```text
 pip install -r requirements.txt
 ```
 
-3. Make sure the input data file exists
+**3. Make sure the input data file exists**
 Expected path:
 ```text
 data/data.FMT
 ```
 
-4. Run the server
+**4. Run the server**
 ```text   
-python -m uvicorn app.main:app --app-dir . --reload
+python -m uvicorn app.main:app --app-dir . --ws websockets-sansio
 ```
 
-5. Open the app
+**5. Open the app**
 Open:
 ```text
 http://127.0.0.1:8000
@@ -236,3 +236,23 @@ The legend editor validates input before saving.
 - each row must include:
   - value
   - color
+
+## Snapshots
+**Initial Interface**
+<img width="1907" height="1010" alt="Screenshot 2026-03-09 144920" src="https://github.com/user-attachments/assets/a35ee447-7fef-4ed9-83e4-b8e542666daa" />
+
+**Plotting different measurements**
+<img width="1920" height="1011" alt="Screenshot (60)" src="https://github.com/user-attachments/assets/81502ca6-1148-4382-bdd9-c9bdd0262c23" />
+
+**Different zoom level**
+<img width="1920" height="1011" alt="Screenshot (59)" src="https://github.com/user-attachments/assets/affc4b8b-23bf-4f71-b1eb-6c31987a31ff" />
+
+**Applying start and end time filter**
+<img width="1920" height="1014" alt="Screenshot (58)" src="https://github.com/user-attachments/assets/81ce4506-4069-4a67-b2d2-cd73483c5c7a" />
+
+**GUI for thresholds**
+<img width="1906" height="1023" alt="Screenshot 2026-03-10 002338" src="https://github.com/user-attachments/assets/11863816-9584-48a1-9445-fa4957132243" />
+
+**User inputs validation** 
+<img width="1903" height="1020" alt="Screenshot 2026-03-10 002238" src="https://github.com/user-attachments/assets/10bc516a-a3e2-4ead-928d-17e48f7ccdc3" />
+
