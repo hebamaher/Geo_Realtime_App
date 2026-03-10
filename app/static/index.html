@@ -27,8 +27,11 @@
       </div>
 
       <div class="panel">
-        <label for="timeSlider">Time filter</label>
-        <input id="timeSlider" type="range" min="0" max="100" value="100" />
+        <label for="timeStartSlider">Time filter</label>
+        <div class="small">From</div>
+        <input id="timeStartSlider" type="range" min="0" max="100" value="0" />
+        <div class="small">To</div>
+        <input id="timeEndSlider" type="range" min="0" max="100" value="100" />
         <div class="small" id="timeLabel">Showing all points</div>
       </div>
 
